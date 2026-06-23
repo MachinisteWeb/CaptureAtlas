@@ -1,19 +1,52 @@
 /* jslint node: true, esversion: 6 */
-var browserPromise = null,
-	shutdownRegistered = false;
+var fs = require('fs'),
+	browserPromise = null,
+	shutdownRegistered = false,
+	systemChromiumPaths = [
+		'/snap/bin/chromium',
+		'/usr/bin/chromium-browser',
+		'/usr/bin/chromium',
+		'/usr/bin/google-chrome-stable'
+	];
+
+function resolveExecutablePath() {
+	var index,
+		candidate;
+
+	if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+		return process.env.PUPPETEER_EXECUTABLE_PATH;
+	}
+
+	for (index = 0; index < systemChromiumPaths.length; index++) {
+		candidate = systemChromiumPaths[index];
+
+		if (fs.existsSync(candidate)) {
+			return candidate;
+		}
+	}
+
+	return undefined;
+}
 
 function launchOptions() {
-	return {
+	var options = {
 		headless: true,
 		args: [
 			'--no-sandbox',
 			'--disable-dev-shm-usage',
 			'--disable-gpu'
 		]
-	};
+	},
+	executablePath = resolveExecutablePath();
+
+	if (executablePath) {
+		options.executablePath = executablePath;
+	}
+
+	return options;
 }
 
-function registerShutdown(puppeteer) {
+function registerShutdown() {
 	if (shutdownRegistered) {
 		return;
 	}
@@ -51,16 +84,21 @@ function registerShutdown(puppeteer) {
 }
 
 function getBrowser(puppeteer) {
-	registerShutdown(puppeteer);
+	registerShutdown();
 
 	if (!browserPromise) {
-		browserPromise = puppeteer.launch(launchOptions()).then(function (browser) {
-			browser.on('disconnected', function () {
-				browserPromise = null;
-			});
+		browserPromise = puppeteer.launch(launchOptions())
+			.then(function (browser) {
+				browser.on('disconnected', function () {
+					browserPromise = null;
+				});
 
-			return browser;
-		});
+				return browser;
+			})
+			.catch(function (err) {
+				browserPromise = null;
+				throw err;
+			});
 	}
 
 	return browserPromise;
@@ -81,4 +119,18 @@ exports.renderPdf = function (puppeteer, url, pdfOptions) {
 			});
 		});
 	});
+};
+
+exports.changeDomPdf = function (next, locals, puppeteer, urlPath) {
+	var url = locals.urlRootPath + locals.webconfig.urlRelativeSubPath + urlPath;
+
+	exports.renderPdf(puppeteer, url)
+		.then(function (pdf) {
+			locals.dom = pdf;
+			next();
+		})
+		.catch(function (err) {
+			console.error('[CaptureAtlas PDF]', url, err.message);
+			throw err;
+		});
 };
